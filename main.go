@@ -17,6 +17,13 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+func main() {
+	if err := commandRoot.Run(context.Background(), os.Args); err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		os.Exit(1)
+	}
+}
+
 var commandRoot = &cli.Command{
 	Name:  "space-saver",
 	Usage: "Space Saver finds duplicate files and saves space on disk by cloning them.",
@@ -85,21 +92,16 @@ var commandCloneDuplicates = &cli.Command{
 	Name:      "clone-duplicates",
 	Usage:     "Clone duplicate files by comparing sha256 hashes and replacing them with cloned files.",
 	ArgsUsage: "[TARGET_DIR]",
-	Arguments: []cli.Argument{
-		&cli.StringArg{
-			Name: "TARGET_DIR",
-			Min:  1,
-			Max:  1,
-		},
-	},
 	Flags: []cli.Flag{
 		&cli.StringFlag{
 			Name:  "min-size",
 			Usage: "The minimum filesize (in kubernetes size format, e.g. 4500MiB)",
+			Value: "5MiB",
 		},
 		&cli.BoolFlag{
 			Name:  "real",
 			Usage: "If we should proceed with replacing duplicate files with cloned files",
+			Value: false,
 		},
 	},
 	Action: func(ctx context.Context, c *cli.Command) error {
@@ -138,9 +140,9 @@ var commandCloneDuplicates = &cli.Command{
 					if err := cloneFile(srcFile.Path, fileInfo.Path); err != nil {
 						return err
 					}
-					fmt.Fprintf(os.Stdout, "Cloned %s to %s\n", truncatePrefix(srcFile.Path, 32), truncatePrefix(fileInfo.Path, 32))
+					fmt.Fprintf(os.Stdout, "Cloned %s to %s\n", truncatePrefix(srcFile.Path, 64), truncatePrefix(fileInfo.Path, 64))
 				} else {
-					fmt.Fprintf(os.Stdout, "%s is a duplicate of %s (%s)\n", truncatePrefix(fileInfo.Path, 32), truncatePrefix(srcFile.Path, 32), filesize.Format(uint64(fileInfo.Size())))
+					fmt.Fprintf(os.Stdout, "[DRY-RUN] Would clone %s to %s\n", truncatePrefix(srcFile.Path, 64), truncatePrefix(fileInfo.Path, 64))
 				}
 			}
 		}
@@ -149,29 +151,10 @@ var commandCloneDuplicates = &cli.Command{
 	},
 }
 
-func truncatePrefix(s string, length int) string {
-	if len(s) < length {
-		return s
-	}
-	return "..." + string([]rune(s)[length:])
-}
-
 var commandCloneFile = &cli.Command{
 	Name:      "clone-file",
 	Usage:     "Clone an indivdiual file.",
 	ArgsUsage: "[SOURCE_FILE] [DEST_FILE]",
-	// Arguments: []cli.Argument{
-	// 	&cli.StringArg{
-	// 		Name: "SOURCE_FILE",
-	// 		Min:  1,
-	// 		Max:  1,
-	// 	},
-	// 	&cli.StringArg{
-	// 		Name: "DEST_FILE",
-	// 		Min:  1,
-	// 		Max:  1,
-	// 	},
-	// },
 	Action: func(ctx context.Context, c *cli.Command) error {
 		if !c.Args().Present() {
 			return fmt.Errorf("must provide a source an destination")
@@ -187,11 +170,11 @@ var commandCloneFile = &cli.Command{
 	},
 }
 
-func main() {
-	if err := commandRoot.Run(context.Background(), os.Args); err != nil {
-		fmt.Fprintf(os.Stderr, "%v\n", err)
-		os.Exit(1)
+func truncatePrefix(s string, length int) string {
+	if len(s) < length {
+		return s
 	}
+	return "..." + string([]rune(s)[length:])
 }
 
 func findDuplicateFiles(targetPath string, minSizeBytes uint64) (hashes map[string][]fullFileInfo, err error) {
@@ -215,7 +198,7 @@ func findDuplicateFiles(targetPath string, minSizeBytes uint64) (hashes map[stri
 				return nil
 			}
 		}
-		hashes[cs] = append(hashes[cs], fullFileInfo{Path: filepath.Join(path, info.Name()), FileInfo: info})
+		hashes[cs] = append(hashes[cs], fullFileInfo{Path: path, FileInfo: info})
 		return nil
 	}))
 	return
@@ -227,12 +210,39 @@ type fullFileInfo struct {
 }
 
 func cloneFile(source, target string) error {
-	if err := unix.Clonefile(source, target, unix.CLONE_NOFOLLOW); err != nil {
+	sourceAbsolute, err := filepath.Abs(source)
+	if err != nil {
+		return fmt.Errorf("clone-file failed: unable to make source path absolute; %w", err)
+	}
+	targetAbsolute, err := filepath.Abs(target)
+	if err != nil {
+		return fmt.Errorf("clone-file failed: unable to make target path absolute; %w", err)
+	}
+
+	if !fileExists(sourceAbsolute) {
+		return fmt.Errorf("clone-file failed: source not found; %s", sourceAbsolute)
+	}
+	targetExists := fileExists(targetAbsolute)
+	if targetExists {
+		if err := os.Rename(targetAbsolute, targetAbsolute+"_temp"); err != nil {
+			return fmt.Errorf("clone-file failed: unable to move target; %w", err)
+		}
+	}
+	if err := unix.Clonefile(sourceAbsolute, targetAbsolute, unix.CLONE_NOFOLLOW); err != nil {
 		if !errors.Is(err, unix.ENOTSUP) && !errors.Is(err, unix.EXDEV) {
+			_ = os.Rename(targetAbsolute+"_temp", target)
 			return fmt.Errorf("clone-file failed: %w", err)
 		}
 	}
+	if targetExists {
+		_ = os.Remove(targetAbsolute + "_temp")
+	}
 	return nil
+}
+
+func fileExists(target string) bool {
+	_, err := os.Stat(target)
+	return err == nil
 }
 
 func checksumFile(path string) (checksum string, err error) {
