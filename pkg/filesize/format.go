@@ -1,6 +1,9 @@
 package filesize
 
-import "strconv"
+import (
+	"fmt"
+	"strconv"
+)
 
 // Format takes a count of bytes and returns a string representation.
 func Format(fileSizeInBytes uint64) string {
@@ -32,4 +35,17 @@ func Format(fileSizeInBytes uint64) string {
 		return string(append(output, []rune(strconv.FormatUint(remainder, 10)+suffixByte)...))
 	}
 	return string(output)
+}
+
+func FormatFraction(fileSizeInBytes uint64) string {
+	if fileSizeInBytes > uint64(Terabyte) {
+		return strconv.FormatFloat(float64(fileSizeInBytes)/float64(Terabyte), 'f', 3, 64) + suffixTerabyte
+	} else if fileSizeInBytes > uint64(Gigabyte) {
+		return strconv.FormatFloat(float64(fileSizeInBytes)/float64(Gigabyte), 'f', 3, 64) + suffixGigabyte
+	} else if fileSizeInBytes > uint64(Megabyte) {
+		return strconv.FormatFloat(float64(fileSizeInBytes)/float64(Megabyte), 'f', 3, 64) + suffixMegabyte
+	} else if fileSizeInBytes > uint64(Kilobyte) {
+		return strconv.FormatFloat(float64(fileSizeInBytes)/float64(Kilobyte), 'f', 3, 64) + suffixKilobyte
+	}
+	return fmt.Sprintf("%db", fileSizeInBytes)
 }

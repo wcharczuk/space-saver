@@ -31,6 +31,7 @@ var commandRoot = &cli.Command{
 		commandFindDuplicates,
 		commandCloneDuplicates,
 		commandCloneFile,
+		commandSameFile,
 	},
 	Action: func(ctx context.Context, cmd *cli.Command) error {
 		cli.ShowAppHelp(cmd)
@@ -53,11 +54,14 @@ var commandFindDuplicates = &cli.Command{
 		if !c.Args().Present() {
 			return fmt.Errorf("Must provide a TARGET_DIR")
 		}
+		if len(c.Args().Slice()) > 1 {
+			return fmt.Errorf("Must only provide a TARGET_DIR")
+		}
 		minSizeBytes, err := filesize.Parse(c.String("min-size"))
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(os.Stdout, "using min size bytes: %d\n", minSizeBytes)
+		fmt.Fprintf(os.Stdout, "Using min size bytes: %v\n", c.String("min-size"))
 		targetDir := c.Args().First()
 		hashes, err := findDuplicateFiles(targetDir, minSizeBytes)
 		if err != nil {
@@ -68,22 +72,13 @@ var commandFindDuplicates = &cli.Command{
 			if len(fileset) < 2 {
 				continue
 			}
-			slices.SortFunc(fileset, func(a, b fullFileInfo) int {
-				if a.ModTime().Before(b.ModTime()) {
-					return -1
-				}
-				if a.ModTime().Equal(b.ModTime()) {
-					return 0
-				}
-				return 1
-			})
 			srcFile := fileset[0]
 			for _, fileInfo := range fileset[1:] {
 				totalPossibleSavingsBytes += uint64(fileInfo.Size())
-				fmt.Fprintf(os.Stdout, "%s is a duplicate of %s (%s)\n", truncatePrefix(fileInfo.Path, 32), truncatePrefix(srcFile.Path, 32), filesize.Format(uint64(fileInfo.Size())))
+				fmt.Fprintf(os.Stdout, "%s is a duplicate of %s (%s)\n", truncateStringPrefix(fileInfo.Path, 32), truncateStringPrefix(srcFile.Path, 32), filesize.Format(uint64(fileInfo.Size())))
 			}
 		}
-		fmt.Fprintf(os.Stdout, "Total savings: %s\n", filesize.Format(totalPossibleSavingsBytes))
+		fmt.Fprintf(os.Stdout, "Total savings: %s\n", filesize.FormatFraction(totalPossibleSavingsBytes))
 		return nil
 	},
 }
@@ -108,11 +103,14 @@ var commandCloneDuplicates = &cli.Command{
 		if !c.Args().Present() {
 			return fmt.Errorf("Must provide a TARGET_DIR")
 		}
+		if len(c.Args().Slice()) > 1 {
+			return fmt.Errorf("Must only provide a TARGET_DIR")
+		}
 		minSizeBytes, err := filesize.Parse(c.String("min-size"))
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(os.Stdout, "using min size bytes: %d\n", minSizeBytes)
+		fmt.Fprintf(os.Stdout, "Using min size bytes: %v\n", c.String("min-size"))
 		targetDir := c.Args().First()
 		hashes, err := findDuplicateFiles(targetDir, minSizeBytes)
 		if err != nil {
@@ -124,15 +122,6 @@ var commandCloneDuplicates = &cli.Command{
 			if len(fileset) < 2 {
 				continue
 			}
-			slices.SortFunc(fileset, func(a, b fullFileInfo) int {
-				if a.ModTime().Before(b.ModTime()) {
-					return -1
-				}
-				if a.ModTime().Equal(b.ModTime()) {
-					return 0
-				}
-				return 1
-			})
 			srcFile := fileset[0]
 			for _, fileInfo := range fileset[1:] {
 				totalPossibleSavingsBytes += uint64(fileInfo.Size())
@@ -140,13 +129,13 @@ var commandCloneDuplicates = &cli.Command{
 					if err := cloneFile(srcFile.Path, fileInfo.Path); err != nil {
 						return err
 					}
-					fmt.Fprintf(os.Stdout, "Cloned %s to %s\n", truncatePrefix(srcFile.Path, 64), truncatePrefix(fileInfo.Path, 64))
+					fmt.Fprintf(os.Stdout, "Cloned %s to %s\n", truncateStringPrefix(srcFile.Path, 64), truncateStringPrefix(fileInfo.Path, 64))
 				} else {
-					fmt.Fprintf(os.Stdout, "[DRY-RUN] Would clone %s to %s\n", truncatePrefix(srcFile.Path, 64), truncatePrefix(fileInfo.Path, 64))
+					fmt.Fprintf(os.Stdout, "[DRY-RUN] Would clone %s to %s\n", truncateStringPrefix(srcFile.Path, 64), truncateStringPrefix(fileInfo.Path, 64))
 				}
 			}
 		}
-		fmt.Fprintf(os.Stdout, "Total savings: %s\n", filesize.Format(totalPossibleSavingsBytes))
+		fmt.Fprintf(os.Stdout, "Total savings: %s\n", filesize.FormatFraction(totalPossibleSavingsBytes))
 		return nil
 	},
 }
@@ -161,16 +150,48 @@ var commandCloneFile = &cli.Command{
 		}
 		sourceFile := c.Args().Get(0)
 		destFile := c.Args().Get(1)
-		fmt.Fprintf(os.Stdout, "Cloning %s to %s\n", truncatePrefix(sourceFile, 32), truncatePrefix(destFile, 32))
+		fmt.Fprintf(os.Stdout, "Cloning %s to %s\n", truncateStringPrefix(sourceFile, 32), truncateStringPrefix(destFile, 32))
 		if err := cloneFile(sourceFile, destFile); err != nil {
 			return err
 		}
-		fmt.Fprintf(os.Stdout, "Cloning %s to %s done!\n", truncatePrefix(sourceFile, 32), truncatePrefix(destFile, 32))
+		fmt.Fprintf(os.Stdout, "Cloning %s to %s done!\n", truncateStringPrefix(sourceFile, 32), truncateStringPrefix(destFile, 32))
 		return nil
 	},
 }
 
-func truncatePrefix(s string, length int) string {
+var commandSameFile = &cli.Command{
+	Name:      "same-file",
+	Usage:     "Test if two files are the same (i.e. one is a clone of the other)",
+	ArgsUsage: "[SOURCE_FILE] [DEST_FILE]",
+	Action: func(ctx context.Context, c *cli.Command) error {
+		if !c.Args().Present() {
+			return fmt.Errorf("Must provide [SOURCE_FILE] and [DEST_FILE].")
+		}
+		if len(c.Args().Slice()) != 2 {
+			return fmt.Errorf("Must provide exactly [SOURCE_FILE] and [DEST_FILE].")
+		}
+		sourceFile := c.Args().Get(0)
+		destFile := c.Args().Get(1)
+
+		sourceInfo, err := os.Stat(sourceFile)
+		if err != nil {
+			fmt.Fprintln(os.Stdout, "[SOURCE_FILE] is missing")
+			return nil
+		}
+		destInfo, err := os.Stat(destFile)
+		if err != nil {
+			fmt.Fprintln(os.Stdout, "[DEST_FILE] is missing")
+			return nil
+		}
+		if os.SameFile(sourceInfo, destInfo) {
+			fmt.Fprintln(os.Stdout, "Files are the same!")
+			return nil
+		}
+		return fmt.Errorf("Files are not the same!")
+	},
+}
+
+func truncateStringPrefix(s string, length int) string {
 	if len(s) < length {
 		return s
 	}
@@ -198,7 +219,20 @@ func findDuplicateFiles(targetPath string, minSizeBytes uint64) (hashes map[stri
 				return nil
 			}
 		}
-		hashes[cs] = append(hashes[cs], fullFileInfo{Path: path, FileInfo: info})
+		ffi := fullFileInfo{Path: path, FileInfo: info}
+		if seenFiles, ok := hashes[cs]; ok {
+			hashes[cs] = insertSorted(seenFiles, ffi, func(a, b fullFileInfo) int {
+				if a.ModTime().Before(b.ModTime()) {
+					return -1
+				}
+				if a.ModTime().Equal(b.ModTime()) {
+					return 0
+				}
+				return 1
+			})
+		} else {
+			hashes[cs] = []fullFileInfo{ffi}
+		}
 		return nil
 	}))
 	return
@@ -218,24 +252,17 @@ func cloneFile(source, target string) error {
 	if err != nil {
 		return fmt.Errorf("clone-file failed: unable to make target path absolute; %w", err)
 	}
-
 	if !fileExists(sourceAbsolute) {
 		return fmt.Errorf("clone-file failed: source not found; %s", sourceAbsolute)
 	}
 	targetExists := fileExists(targetAbsolute)
 	if targetExists {
-		if err := os.Rename(targetAbsolute, targetAbsolute+"_temp"); err != nil {
-			return fmt.Errorf("clone-file failed: unable to move target; %w", err)
-		}
+		_ = os.Remove(targetAbsolute)
 	}
 	if err := unix.Clonefile(sourceAbsolute, targetAbsolute, unix.CLONE_NOFOLLOW); err != nil {
 		if !errors.Is(err, unix.ENOTSUP) && !errors.Is(err, unix.EXDEV) {
-			_ = os.Rename(targetAbsolute+"_temp", target)
 			return fmt.Errorf("clone-file failed: %w", err)
 		}
-	}
-	if targetExists {
-		_ = os.Remove(targetAbsolute + "_temp")
 	}
 	return nil
 }
@@ -258,4 +285,12 @@ func checksumFile(path string) (checksum string, err error) {
 	}
 	checksum = hex.EncodeToString(h.Sum(nil))
 	return
+}
+
+func insertSorted[A any](working []A, v A, sorter func(A, A) int) []A {
+	insertAt, _ := slices.BinarySearchFunc(working, v, sorter)
+	working = append(working, v)
+	copy(working[insertAt+1:], working[insertAt:])
+	working[insertAt] = v
+	return working
 }
